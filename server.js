@@ -16,16 +16,38 @@ const NO_STORE_HEADERS = {
   'Cache-Control': 'no-store',
   'X-Content-Type-Options': 'nosniff',
 };
+const MOSCOW_DATE_FORMATTER = new Intl.DateTimeFormat('ru-RU', {
+  day: 'numeric',
+  month: 'long',
+  timeZone: 'Europe/Moscow',
+  year: 'numeric',
+});
+const MOSCOW_DATE_TIME_FORMATTER = new Intl.DateTimeFormat('ru-RU', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+  timeZone: 'Europe/Moscow',
+});
 
 function getCurrentPageData() {
-  const walkDate = getCurrentMoscowDate();
-  ensureWalkSlotsForDate(walkDate);
+  const date = getCurrentMoscowDate();
+  ensureWalkSlotsForDate(date);
 
   return {
-    lastFeeding: getLatestFeeding(),
-    walkDate,
-    walkSlots: getWalkSlotsForDate(walkDate),
+    date,
+    feeding: getLatestFeeding(),
+    slots: getWalkSlotsForDate(date),
   };
+}
+
+function getRequestPath(requestUrl) {
+  try {
+    const { pathname } = new URL(requestUrl, 'http://localhost');
+    const pathWithoutTrailingSlash = pathname.replace(/\/+$/, '');
+
+    return pathWithoutTrailingSlash || '/';
+  } catch {
+    return null;
+  }
 }
 
 function escapeHtml(value) {
@@ -91,11 +113,9 @@ function renderFeedingCard(lastFeeding, formError) {
   let feedingState = '<p class="feeding-card__state">Кормление пока не отмечали.</p>';
 
   if (lastFeeding !== null) {
-    const formattedFeedingTime = new Intl.DateTimeFormat('ru-RU', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-      timeZone: 'Europe/Moscow',
-    }).format(new Date(lastFeeding.fed_at));
+    const formattedFeedingTime = MOSCOW_DATE_TIME_FORMATTER.format(
+      new Date(lastFeeding.fed_at),
+    );
 
     feedingState = `<p class="feeding-card__state">Последним отметил: <strong>${escapeHtml(lastFeeding.employee_name)}</strong></p>
         <p class="feeding-card__time">Время: <time datetime="${escapeHtml(lastFeeding.fed_at)}">${escapeHtml(formattedFeedingTime)}</time></p>`;
@@ -115,27 +135,24 @@ function renderFeedingCard(lastFeeding, formError) {
       </section>`;
 }
 
-function renderPage(
-  walkDate,
-  walkSlots,
-  lastFeeding,
-  walkFormError = null,
+function renderPage({
+  date,
+  slots,
+  feeding,
+  walkError = null,
   pageMessage = null,
-  feedingFormError = null,
-) {
-  const formattedDate = new Intl.DateTimeFormat('ru-RU', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'Europe/Moscow',
-  }).format(new Date(`${walkDate}T12:00:00+03:00`));
-  const slotItems = walkSlots
-    .map((walkSlot) => renderWalkSlot(walkSlot, walkFormError))
+  feedingError = null,
+}) {
+  const formattedDate = MOSCOW_DATE_FORMATTER.format(
+    new Date(`${date}T12:00:00+03:00`),
+  );
+  const slotItems = slots
+    .map((walkSlot) => renderWalkSlot(walkSlot, walkError))
     .join('\n          ');
   const pageMessageHtml = pageMessage
     ? `<p class="page-message" role="alert">${escapeHtml(pageMessage)}</p>`
     : '';
-  const feedingCard = renderFeedingCard(lastFeeding, feedingFormError);
+  const feedingCard = renderFeedingCard(feeding, feedingError);
 
   return `<!doctype html>
 <html lang="ru">
@@ -357,7 +374,7 @@ function renderPage(
   <body>
     <main>
       <h1>Кто выгуливает Бориса</h1>
-      <p>Сегодня: <time datetime="${walkDate}">${formattedDate}</time></p>
+      <p>Сегодня: <time datetime="${date}">${formattedDate}</time></p>
       ${pageMessageHtml}
       <section aria-labelledby="walk-slots-title">
         <h2 id="walk-slots-title">Слоты прогулок</h2>
@@ -379,29 +396,28 @@ function sendText(response, statusCode, message) {
   response.end(message);
 }
 
-function sendPage(
-  response,
-  statusCode,
-  walkDate,
-  walkSlots,
-  lastFeeding,
-  walkFormError = null,
+function sendPage(response, {
+  status,
+  date,
+  slots,
+  feeding,
+  walkError = null,
   pageMessage = null,
-  feedingFormError = null,
-) {
-  response.writeHead(statusCode, {
+  feedingError = null,
+}) {
+  response.writeHead(status, {
     ...NO_STORE_HEADERS,
     'Content-Type': 'text/html; charset=utf-8',
   });
   response.end(
-    renderPage(
-      walkDate,
-      walkSlots,
-      lastFeeding,
-      walkFormError,
+    renderPage({
+      date,
+      slots,
+      feeding,
+      walkError,
       pageMessage,
-      feedingFormError,
-    ),
+      feedingError,
+    }),
   );
 }
 
@@ -421,14 +437,16 @@ async function readForm(request) {
 }
 
 const server = http.createServer(async (request, response) => {
-  if (request.method === 'GET' && request.url === '/') {
-    const { lastFeeding, walkDate, walkSlots } = getCurrentPageData();
+  const requestPath = getRequestPath(request.url);
 
-    sendPage(response, 200, walkDate, walkSlots, lastFeeding);
+  if (request.method === 'GET' && requestPath === '/') {
+    const pageData = getCurrentPageData();
+
+    sendPage(response, { ...pageData, status: 200 });
     return;
   }
 
-  if (request.method === 'POST' && request.url === '/walks') {
+  if (request.method === 'POST' && requestPath === '/walks') {
     const contentType = request.headers['content-type'] ?? '';
 
     if (!contentType.startsWith('application/x-www-form-urlencoded')) {
@@ -441,8 +459,10 @@ const server = http.createServer(async (request, response) => {
       const slotTime = form.get('slotTime') ?? '';
       const enteredEmployeeName = form.get('employeeName') ?? '';
       const employeeName = enteredEmployeeName.trim();
-      const { lastFeeding, walkDate, walkSlots } = getCurrentPageData();
-      const slotExists = walkSlots.some(({ slot_time: time }) => time === slotTime);
+      const pageData = getCurrentPageData();
+      const slotExists = pageData.slots.some(
+        ({ slot_time: time }) => time === slotTime,
+      );
 
       if (!slotExists) {
         sendText(response, 400, 'Выберите доступный слот');
@@ -450,34 +470,26 @@ const server = http.createServer(async (request, response) => {
       }
 
       if (!employeeName || employeeName.length > 120) {
-        sendPage(
-          response,
-          400,
-          walkDate,
-          walkSlots,
-          lastFeeding,
-          {
+        sendPage(response, {
+          ...pageData,
+          status: 400,
+          walkError: {
             employeeName: enteredEmployeeName,
             message: 'Введите непустое ФИО',
             slotTime,
           },
-        );
+        });
         return;
       }
 
-      if (!bookWalkSlot(walkDate, slotTime, employeeName)) {
-        const currentWalkSlots = getWalkSlotsForDate(walkDate);
-        const currentLastFeeding = getLatestFeeding();
-
-        sendPage(
-          response,
-          409,
-          walkDate,
-          currentWalkSlots,
-          currentLastFeeding,
-          null,
-          'Этот слот уже занят. Первоначальная запись сохранена.',
-        );
+      if (!bookWalkSlot(pageData.date, slotTime, employeeName)) {
+        sendPage(response, {
+          ...pageData,
+          feeding: getLatestFeeding(),
+          pageMessage: 'Этот слот уже занят. Первоначальная запись сохранена.',
+          slots: getWalkSlotsForDate(pageData.date),
+          status: 409,
+        });
         return;
       }
 
@@ -496,7 +508,7 @@ const server = http.createServer(async (request, response) => {
     }
   }
 
-  if (request.method === 'POST' && request.url === '/feedings') {
+  if (request.method === 'POST' && requestPath === '/feedings') {
     const contentType = request.headers['content-type'] ?? '';
 
     if (!contentType.startsWith('application/x-www-form-urlencoded')) {
@@ -510,11 +522,13 @@ const server = http.createServer(async (request, response) => {
       const employeeName = enteredEmployeeName.trim();
 
       if (!employeeName || employeeName.length > 120) {
-        const { lastFeeding, walkDate, walkSlots } = getCurrentPageData();
-
-        sendPage(response, 400, walkDate, walkSlots, lastFeeding, null, null, {
-          employeeName: enteredEmployeeName,
-          message: 'Введите непустое ФИО',
+        sendPage(response, {
+          ...getCurrentPageData(),
+          feedingError: {
+            employeeName: enteredEmployeeName,
+            message: 'Введите непустое ФИО',
+          },
+          status: 400,
         });
         return;
       }
