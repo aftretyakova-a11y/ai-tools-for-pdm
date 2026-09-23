@@ -12,6 +12,10 @@ const {
 const port = Number.parseInt(process.env.PORT ?? '3000', 10);
 const host = process.env.HOST ?? '127.0.0.1';
 const MAX_FORM_BYTES = 4096;
+const NO_STORE_HEADERS = {
+  'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
+};
 
 function getCurrentPageData() {
   const walkDate = getCurrentMoscowDate();
@@ -368,7 +372,10 @@ function renderPage(
 }
 
 function sendText(response, statusCode, message) {
-  response.writeHead(statusCode, { 'Content-Type': 'text/plain; charset=utf-8' });
+  response.writeHead(statusCode, {
+    ...NO_STORE_HEADERS,
+    'Content-Type': 'text/plain; charset=utf-8',
+  });
   response.end(message);
 }
 
@@ -382,7 +389,10 @@ function sendPage(
   pageMessage = null,
   feedingFormError = null,
 ) {
-  response.writeHead(statusCode, { 'Content-Type': 'text/html; charset=utf-8' });
+  response.writeHead(statusCode, {
+    ...NO_STORE_HEADERS,
+    'Content-Type': 'text/html; charset=utf-8',
+  });
   response.end(
     renderPage(
       walkDate,
@@ -471,7 +481,7 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
-      response.writeHead(303, { Location: './' });
+      response.writeHead(303, { ...NO_STORE_HEADERS, Location: './' });
       response.end();
       return;
     } catch (error) {
@@ -510,7 +520,7 @@ const server = http.createServer(async (request, response) => {
       }
 
       addFeeding(employeeName);
-      response.writeHead(303, { Location: './' });
+      response.writeHead(303, { ...NO_STORE_HEADERS, Location: './' });
       response.end();
       return;
     } catch (error) {

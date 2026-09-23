@@ -5,6 +5,7 @@ const databasePath = process.env.SQLITE_PATH ?? path.join(__dirname, 'boris.sqli
 const database = new DatabaseSync(databasePath);
 
 const WALK_SLOT_TIMES = ['09:00', '11:00', '13:00', '15:00', '17:00'];
+const FEEDING_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const MOSCOW_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   day: '2-digit',
   month: '2-digit',
@@ -65,6 +66,10 @@ const insertFeeding = database.prepare(`
   INSERT INTO feedings (employee_name, fed_at)
   VALUES (?, ?)
 `);
+const deleteFeedingsBefore = database.prepare(`
+  DELETE FROM feedings
+  WHERE fed_at < ?
+`);
 const selectLatestFeeding = database.prepare(`
   SELECT id, employee_name, fed_at
   FROM feedings
@@ -102,15 +107,25 @@ function bookWalkSlot(walkDate, slotTime, employeeName) {
   return result.changes === 1;
 }
 
+function pruneOldFeedings(now = new Date()) {
+  const cutoff = new Date(now.getTime() - FEEDING_RETENTION_MS).toISOString();
+
+  return deleteFeedingsBefore.run(cutoff).changes;
+}
+
 function addFeeding(employeeName) {
+  pruneOldFeedings();
   insertFeeding.run(employeeName, new Date().toISOString());
 }
 
 function getLatestFeeding() {
+  pruneOldFeedings();
+
   return selectLatestFeeding.get() ?? null;
 }
 
 ensureWalkSlotsForDate(getCurrentMoscowDate());
+pruneOldFeedings();
 
 module.exports = {
   addFeeding,
