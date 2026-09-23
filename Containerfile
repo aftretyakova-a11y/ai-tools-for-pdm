@@ -8,6 +8,7 @@ RUN npm ci --omit=dev
 COPY --chown=node:node server.js database.js ./
 
 ENV NODE_ENV=production
+ENV TZ=Europe/Moscow
 ENV PORT=8080
 ENV HOST=0.0.0.0
 

@@ -5,12 +5,18 @@ const databasePath = process.env.SQLITE_PATH ?? path.join(__dirname, 'boris.sqli
 const database = new DatabaseSync(databasePath);
 
 const WALK_SLOT_TIMES = ['09:00', '11:00', '13:00', '15:00', '17:00'];
+const MOSCOW_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  day: '2-digit',
+  month: '2-digit',
+  timeZone: 'Europe/Moscow',
+  year: 'numeric',
+});
 
-function getCurrentLocalDate() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
+function getCurrentMoscowDate(now = new Date()) {
+  const dateParts = MOSCOW_DATE_FORMATTER.formatToParts(now);
+  const year = dateParts.find(({ type }) => type === 'year').value;
+  const month = dateParts.find(({ type }) => type === 'month').value;
+  const day = dateParts.find(({ type }) => type === 'day').value;
 
   return `${year}-${month}-${day}`;
 }
@@ -41,21 +47,6 @@ const insertWalkSlot = database.prepare(`
   INSERT OR IGNORE INTO walk_slots (walk_date, slot_time, booked_by, booked_at)
   VALUES (?, ?, NULL, NULL)
 `);
-const currentDate = getCurrentLocalDate();
-
-database.exec('BEGIN');
-
-try {
-  for (const slotTime of WALK_SLOT_TIMES) {
-    insertWalkSlot.run(currentDate, slotTime);
-  }
-
-  database.exec('COMMIT');
-} catch (error) {
-  database.exec('ROLLBACK');
-  throw error;
-}
-
 const selectWalkSlotsByDate = database.prepare(`
   SELECT id, walk_date, slot_time, booked_by, booked_at
   FROM walk_slots
@@ -81,6 +72,21 @@ const selectLatestFeeding = database.prepare(`
   LIMIT 1
 `);
 
+function ensureWalkSlotsForDate(walkDate) {
+  database.exec('BEGIN');
+
+  try {
+    for (const slotTime of WALK_SLOT_TIMES) {
+      insertWalkSlot.run(walkDate, slotTime);
+    }
+
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+}
+
 function getWalkSlotsForDate(walkDate) {
   return selectWalkSlotsByDate.all(walkDate);
 }
@@ -104,12 +110,15 @@ function getLatestFeeding() {
   return selectLatestFeeding.get() ?? null;
 }
 
+ensureWalkSlotsForDate(getCurrentMoscowDate());
+
 module.exports = {
   addFeeding,
   bookWalkSlot,
-  currentDate,
   database,
   databasePath,
+  ensureWalkSlotsForDate,
+  getCurrentMoscowDate,
   getLatestFeeding,
   getWalkSlotsForDate,
 };

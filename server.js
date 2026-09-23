@@ -3,7 +3,8 @@ const http = require('node:http');
 const {
   addFeeding,
   bookWalkSlot,
-  currentDate,
+  ensureWalkSlotsForDate,
+  getCurrentMoscowDate,
   getLatestFeeding,
   getWalkSlotsForDate,
 } = require('./database');
@@ -11,6 +12,17 @@ const {
 const port = Number.parseInt(process.env.PORT ?? '3000', 10);
 const host = process.env.HOST ?? '127.0.0.1';
 const MAX_FORM_BYTES = 4096;
+
+function getCurrentPageData() {
+  const walkDate = getCurrentMoscowDate();
+  ensureWalkSlotsForDate(walkDate);
+
+  return {
+    lastFeeding: getLatestFeeding(),
+    walkDate,
+    walkSlots: getWalkSlotsForDate(walkDate),
+  };
+}
 
 function escapeHtml(value) {
   const characters = {
@@ -363,6 +375,7 @@ function sendText(response, statusCode, message) {
 function sendPage(
   response,
   statusCode,
+  walkDate,
   walkSlots,
   lastFeeding,
   walkFormError = null,
@@ -372,7 +385,7 @@ function sendPage(
   response.writeHead(statusCode, { 'Content-Type': 'text/html; charset=utf-8' });
   response.end(
     renderPage(
-      currentDate,
+      walkDate,
       walkSlots,
       lastFeeding,
       walkFormError,
@@ -399,10 +412,9 @@ async function readForm(request) {
 
 const server = http.createServer(async (request, response) => {
   if (request.method === 'GET' && request.url === '/') {
-    const walkSlots = getWalkSlotsForDate(currentDate);
-    const lastFeeding = getLatestFeeding();
+    const { lastFeeding, walkDate, walkSlots } = getCurrentPageData();
 
-    sendPage(response, 200, walkSlots, lastFeeding);
+    sendPage(response, 200, walkDate, walkSlots, lastFeeding);
     return;
   }
 
@@ -419,8 +431,7 @@ const server = http.createServer(async (request, response) => {
       const slotTime = form.get('slotTime') ?? '';
       const enteredEmployeeName = form.get('employeeName') ?? '';
       const employeeName = enteredEmployeeName.trim();
-      const walkSlots = getWalkSlotsForDate(currentDate);
-      const lastFeeding = getLatestFeeding();
+      const { lastFeeding, walkDate, walkSlots } = getCurrentPageData();
       const slotExists = walkSlots.some(({ slot_time: time }) => time === slotTime);
 
       if (!slotExists) {
@@ -432,6 +443,7 @@ const server = http.createServer(async (request, response) => {
         sendPage(
           response,
           400,
+          walkDate,
           walkSlots,
           lastFeeding,
           {
@@ -443,13 +455,14 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
-      if (!bookWalkSlot(currentDate, slotTime, employeeName)) {
-        const currentWalkSlots = getWalkSlotsForDate(currentDate);
+      if (!bookWalkSlot(walkDate, slotTime, employeeName)) {
+        const currentWalkSlots = getWalkSlotsForDate(walkDate);
         const currentLastFeeding = getLatestFeeding();
 
         sendPage(
           response,
           409,
+          walkDate,
           currentWalkSlots,
           currentLastFeeding,
           null,
@@ -487,10 +500,9 @@ const server = http.createServer(async (request, response) => {
       const employeeName = enteredEmployeeName.trim();
 
       if (!employeeName || employeeName.length > 120) {
-        const walkSlots = getWalkSlotsForDate(currentDate);
-        const lastFeeding = getLatestFeeding();
+        const { lastFeeding, walkDate, walkSlots } = getCurrentPageData();
 
-        sendPage(response, 400, walkSlots, lastFeeding, null, null, {
+        sendPage(response, 400, walkDate, walkSlots, lastFeeding, null, null, {
           employeeName: enteredEmployeeName,
           message: 'Введите непустое ФИО',
         });
